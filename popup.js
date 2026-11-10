@@ -18,11 +18,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const myId = await getMyId();
   document.getElementById('myCode').textContent = myId;
   const data = await chrome.storage.local.get(['leoShareContacts', 'leoShareOutboxCount', 'leoShareMissed']);
-  const contacts = Array.isArray(data.leoShareContacts) ? data.leoShareContacts.filter((c) => c.trusted).length : 0;
+  const contacts = Array.isArray(data.leoShareContacts) ? data.leoShareContacts.length : 0;
   const queued = data.leoShareOutboxCount || 0;
   const missed = Array.isArray(data.leoShareMissed) ? data.leoShareMissed.length : 0;
   const bits = [];
-  if (contacts) bits.push(contacts + ' trusted contact' + (contacts === 1 ? '' : 's'));
+  if (contacts) bits.push(contacts + ' contact' + (contacts === 1 ? '' : 's'));
   if (queued) bits.push(queued + ' file' + (queued === 1 ? '' : 's') + ' queued');
   if (missed) bits.push(missed + ' missed');
   document.getElementById('counts').textContent = bits.join(' · ');

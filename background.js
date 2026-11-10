@@ -33,8 +33,8 @@ async function rebuildMenus() {
   try {
     await chrome.contextMenus.removeAll();
     const data = await chrome.storage.local.get('leoShareContacts');
-    const contacts = (Array.isArray(data.leoShareContacts) ? data.leoShareContacts : [])
-      .filter((c) => c.trusted);
+    // v1.3: every contact is trusted — no filter.
+    const contacts = Array.isArray(data.leoShareContacts) ? data.leoShareContacts : [];
     chrome.contextMenus.create({
       id: 'leoshare-root',
       title: 'Send with LeoShare',

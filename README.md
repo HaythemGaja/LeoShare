@@ -7,12 +7,28 @@ No email. No Google Drive. Nothing is uploaded to any server.
 
 - Each browser gets a short code, like `leo-abc123`.
 - You paste the other device's code and hit **Connect** — or tap a saved
-  trusted contact, or scan its QR code.
+  contact, or scan its QR code.
 - Files travel **directly browser → browser** over an encrypted WebRTC
   DataChannel (DTLS). PeerJS cloud (`0.peerjs.com`) is used only for
   signalling — to introduce the two browsers. It never sees your files.
 - Files are sent in 16 KB pieces with progress, speed, and Accept/Decline
   on the receiving side. Received files download automatically.
+
+## What's new in v1.3 (simpler contacts, contact-first chat)
+
+- **Contacts are simple now.** Add a device once and it IS a contact —
+  there is no separate "trusted" step, no Trust/Untrust buttons, no
+  "Save as trusted" button, and no per-contact auto-accept toggle.
+  Connecting to a new device adds it as a contact automatically.
+  Old contacts are migrated on first run (the trusted flag is dropped).
+- **Files from any contact auto-accept.** The checkbox now only covers
+  devices that aren't contacts.
+- **Tap a contact to start.** Tapping a contact (or its Chat / Send
+  file buttons) selects it, connects to it, and makes it the recipient
+  for files, clipboard and chat. A "Chatting with …" bar shows who
+  you're talking to, with Chat / Send file / Clipboard shortcuts.
+  The selected contact stays highlighted, with ● Online now when
+  its data channel is open.
 
 ## What's new in v1.2.1 (connection fix)
 
@@ -59,8 +75,8 @@ close then deleting the live one. That is the 5-incoming-connections-in-
   the hash on completion and shows “checksum verified” or a mismatch
   warning. History records the result.
 
-### 3. Send to several trusted contacts at once
-- Tick several trusted contacts in the multi-send list, drop files once.
+### 3. Send to several contacts at once
+- Tick several contacts in the multi-send list, drop files once.
 - LeoShare sends to each in turn — live if they're online, queued if
   not — and auto-advances to the next contact. One peer connection at a
   time under the hood; the queue makes the offline ones wait their turn.
@@ -73,7 +89,7 @@ close then deleting the live one. That is the 5-incoming-connections-in-
 
 ### 5. Right-click Send with LeoShare
 - Right-click selected text, a link, an image, or a page → **Send with
-  LeoShare** → pick a trusted contact (or the connected device).
+  LeoShare** → pick a contact (or the connected device).
 - The background worker stores that as a pending send and opens LeoShare;
   the tab sends it, or holds it for that device if they're offline.
 
@@ -98,7 +114,7 @@ close then deleting the live one. That is the 5-incoming-connections-in-
 
 ## v1.1 features (still in)
 
-- **Trusted contacts** — saved in `chrome.storage.local`, rename / trust /
+- **Contacts** — saved in `chrome.storage.local`, rename /
   per-contact auto-accept / one-tap Connect, last seen.
 - **Offline queue** — files for an offline peer are stored in this
   browser's IndexedDB, survive tab close / Chrome restart, and auto-send
@@ -116,7 +132,7 @@ close then deleting the live one. That is the 5-incoming-connections-in-
 
 > Upgrading from v1.0 / v1.1: remove the old unpacked extension (or reload
 > it in `chrome://extensions`) and Load unpacked again from the new folder.
-> Your device code is kept. Trusted contacts / queue / history carry over
+> Your device code is kept. Contacts / queue / history carry over
 > on that browser (they live in that browser's storage).
 
 > The same folder works on Brave / Edge (both Chromium) too.
@@ -126,7 +142,7 @@ close then deleting the live one. That is the 5-incoming-connections-in-
 1. Click the LeoShare icon → **Open LeoShare** (a tab opens).
    Your code is shown at the top, e.g. `leo-abc123`. Set a display name
    so the other side sees e.g. “Haythem's laptop” in notifications.
-2. Connect by code, QR, or a trusted contact.
+2. Connect by code, QR, or a contact.
 3. Drag files / a folder into the Send box, or use Choose files / folder.
 4. On the receiving device, check the preview, then tap **Accept & download**.
    Or tick "Auto-accept files" / per-contact auto-accept to skip that step.
@@ -145,7 +161,7 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - The queue lives on the *sender's* device only — a file can only
   actually arrive when **both** browsers are open at the same time.
 - "New code" gives you a fresh device code; the old one stops working —
-  update it in your trusted contacts on the other device.
+  update it in your contacts on the other device.
 
 ## What was actually tested here
 
@@ -175,4 +191,4 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - `lib/jsqr.js` — jsQR 1.4.0, for Scan QR
 - `icons/` — extension icons
 
-Version 1.2.1 — built 2026-11-10.
+Version 1.3 — built 2026-11-10.

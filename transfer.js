@@ -12,8 +12,7 @@
 // browser <-> browser over DTLS-encrypted WebRTC.
 //
 // v1.2: (1) folder send with paths + ZIP download, (2) pause/resume/
-// cancel + SHA-256 verification, (3) multi-send to several trusted
-// contacts in turn, (4) cross-device clipboard, (5) right-click Send
+// cancel + SHA-256 verification, (3) multi-send to several contacts in turn, (4) cross-device clipboard, (5) right-click Send
 // with LeoShare (via background pending send), (6) transfer history,
 // (7) QR show/scan pairing, (8) preview before accepting.
 
@@ -223,13 +222,24 @@ async function filesFromFolderInput(input) {
   }));
 }
 
-// ---------- Trusted contacts ----------
+// ---------- Contacts ----------
+// v1.3: contacts are simple. Add a device once and it IS a contact —
+// there is no separate "trusted" step, no Trust/Untrust, and no
+// per-contact auto-accept toggle. Files from any contact auto-accept.
+let selectedContact = null; // code of the contact you are chatting/sending to
 async function loadContacts() {
   const data = await chrome.storage.local.get(['leoShareContacts', 'leoShareDisplayName', 'leoShareAutoAccept']);
   contacts = Array.isArray(data.leoShareContacts) ? data.leoShareContacts : [];
+  // Migrate old contacts: drop the trusted flag, they are all trusted now.
+  let migrated = false;
+  for (const c of contacts) {
+    if ('trusted' in c) { delete c.trusted; migrated = true; }
+    if (!c.autoAccept) { c.autoAccept = true; migrated = true; }
+  }
   myDisplayName = data.leoShareDisplayName || '';
   if (myDisplayName) $('displayName').value = myDisplayName;
   if (data.leoShareAutoAccept) $('autoAccept').checked = true;
+  if (migrated) await chrome.storage.local.set({ leoShareContacts: contacts });
   renderContacts();
 }
 async function saveContacts() {
@@ -241,7 +251,7 @@ async function upsertContact(code, patch) {
   code = normaliseCode(code);
   if (!code || code === myId) return null;
   let c = contacts.find((x) => x.code === code);
-  if (!c) { c = { code, name: code, trusted: false, autoAccept: false, addedAt: Date.now(), lastSeen: 0 }; contacts.push(c); }
+  if (!c) { c = { code, name: code, autoAccept: true, addedAt: Date.now(), lastSeen: 0 }; contacts.push(c); }
   Object.assign(c, patch || {});
   await saveContacts();
   return c;
@@ -259,8 +269,8 @@ function renderContacts() {
   multi.innerHTML = '';
   const sorted = [...contacts].sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
   if (!sorted.length) {
-    list.innerHTML = '<p class="empty">No trusted contacts yet. Connect once, then tap “Save as trusted”, or add one above.</p>';
-    multi.innerHTML = '<span style="font-size:12px;color:#64748b">No trusted contacts yet.</span>';
+    list.innerHTML = '<p class="empty">No contacts yet. Connect to a device once, or add one above.</p>';
+    multi.innerHTML = '<span style="font-size:12px;color:#64748b">No contacts yet.</span>';
     return;
   }
   list.innerHTML = '';
@@ -269,40 +279,82 @@ function renderContacts() {
     opt.value = c.code; opt.setAttribute('data-contact', '1');
     opt.textContent = (c.name || c.code) + ' (' + c.code + ')';
     sel.appendChild(opt);
-    if (c.trusted) {
-      const lab = document.createElement('label');
-      lab.innerHTML = `<input type="checkbox" value="${escapeHtml(c.code)}"> ${escapeHtml(c.name || c.code)}`;
-      multi.appendChild(lab);
-    }
+    const lab = document.createElement('label');
+    lab.innerHTML = `<input type="checkbox" value="${escapeHtml(c.code)}"> ${escapeHtml(c.name || c.code)}`;
+    multi.appendChild(lab);
     const row = document.createElement('div');
-    row.className = 'contact-row';
-    const lastSeen = c.lastSeen ? 'Last seen ' + fmtTime(c.lastSeen) : 'Never connected yet';
-    row.innerHTML = `<div class="top"><span><span class="name">${escapeHtml(c.name || c.code)}</span>${c.trusted ? '<span class="badge">⭐ Trusted</span>' : ''}<br><span class="code">${escapeHtml(c.code)}</span></span></div>
-      <div class="row-meta">${escapeHtml(lastSeen)}${c.autoAccept ? ' · auto-accept on' : ''}</div>
+    row.className = 'contact-row' + (selectedContact === c.code ? ' selected' : '');
+    const online = isUsable(c.code);
+    const lastSeen = online ? '● Online now' : (c.lastSeen ? 'Last seen ' + fmtTime(c.lastSeen) : 'Never connected yet');
+    row.innerHTML = `<div class="top"><span><span class="name">${escapeHtml(c.name || c.code)}</span><br><span class="code">${escapeHtml(c.code)}</span></span></div>
+      <div class="row-meta">${escapeHtml(lastSeen)}</div>
       <div class="row-actions"></div>`;
+    // Tap the row itself to select this contact and start chatting/sending.
+    row.addEventListener('click', () => selectContact(c.code));
     const actions = row.querySelector('.row-actions');
     const mk = (label, cls, fn) => {
       const b = document.createElement('button');
       b.className = 'small ' + (cls || 'ghost'); b.textContent = label;
-      b.addEventListener('click', fn); actions.appendChild(b); return b;
+      b.addEventListener('click', (e) => { e.stopPropagation(); fn(); }); actions.appendChild(b); return b;
     };
-    mk('Connect', '', () => { $('peerInput').value = c.code; connectTo(c.code); });
-    mk(c.trusted ? 'Untrust' : 'Trust', 'ghost', async () => {
-      await upsertContact(c.code, { trusted: !c.trusted, autoAccept: !c.trusted ? c.autoAccept : false });
-    });
-    mk(c.autoAccept ? 'Auto-accept: on' : 'Auto-accept: off', 'ghost', async () => {
-      if (!c.trusted) { alert('Trust this contact first — auto-accept is only for trusted contacts.'); return; }
-      await upsertContact(c.code, { autoAccept: !c.autoAccept });
-    });
+    mk('Chat', '', () => selectContact(c.code, 'chat'));
+    mk('Send file', '', () => selectContact(c.code, 'file'));
     mk('Rename', 'ghost', async () => {
       const name = prompt('Name for ' + c.code + ':', c.name || '');
       if (name && name.trim()) await upsertContact(c.code, { name: name.trim() });
     });
     mk('Remove', 'danger', async () => {
-      if (confirm('Remove ' + (c.name || c.code) + ' from trusted contacts?')) await removeContact(c.code);
+      if (confirm('Remove ' + (c.name || c.code) + ' from contacts?')) {
+        if (selectedContact === c.code) { selectedContact = null; updateActiveBar(); }
+        await removeContact(c.code);
+      }
     });
     list.appendChild(row);
   }
+  // Keep the Send-to select on the selected contact after a re-render.
+  if (selectedContact) sel.value = selectedContact;
+  updateActiveBar();
+}
+
+// Select a contact: they become the recipient for files, clipboard and
+// chat, and LeoShare connects to them (once — v1.2.1's connect guard).
+function selectContact(code, action) {
+  code = normaliseCode(code);
+  if (!code) return;
+  selectedContact = code;
+  $('sendToSelect').value = code;
+  $('peerInput').value = code;
+  renderContacts();
+  if (!isUsable(code)) connectTo(code);
+  else log('Selected ' + contactName(code) + ' — ready to chat and send.');
+  if (action === 'chat') {
+    $('msgInput').focus();
+    $('msgInput').scrollIntoView({ block: 'center' });
+  } else if (action === 'file') {
+    $('fileInput').click();
+  } else if (action === 'clip') {
+    $('clipText').focus();
+    $('clipText').scrollIntoView({ block: 'center' });
+  }
+}
+function updateActiveBar() {
+  const bar = $('activeBar');
+  const hint = $('activeHint');
+  const chatHint = $('chatHint');
+  if (!selectedContact) {
+    if (bar) bar.style.display = 'none';
+    if (hint) hint.textContent = 'No contact selected yet — tap a contact above.';
+    if (chatHint) chatHint.textContent = 'Pick a contact above first, then type here.';
+    return;
+  }
+  const name = contactName(selectedContact);
+  if (bar) {
+    bar.style.display = 'flex';
+    const t = $('activeBarText');
+    if (t) t.innerHTML = 'Chatting with <b>' + escapeHtml(name) + '</b>' + (isUsable(selectedContact) ? ' ● connected' : ' — connecting…');
+  }
+  if (hint) hint.textContent = 'Sending to ' + name + '.';
+  if (chatHint) chatHint.textContent = 'Messages go to ' + name + '.';
 }
 
 // ---------- Missed list ----------
@@ -622,7 +674,7 @@ async function initPeer() {
   await consumePendingSend();
   peer = new Peer(myId, { debug: 0 });
   peer.on('open', (id) => {
-    setStatus('Online — ready. Paste the other device’s code to connect, or tap a trusted contact.', true);
+    setStatus('Online — ready. Paste the other device’s code to connect, or tap a contact.', true);
     log('Online as ' + id, 'ok');
   });
   peer.on('connection', (c) => {
@@ -688,9 +740,10 @@ function attachConn(c) {
     if (!conns.size) {
       $('connectBtn').disabled = false;
       $('disconnectBtn').disabled = true;
-      setStatus('Online — ready. Paste the other device’s code to connect, or tap a trusted contact.', true);
+      setStatus('Online — ready. Paste the other device’s code to connect, or tap a contact.', true);
     }
     renderOutbox();
+    updateActiveBar();
     advanceMultiSend();
   });
   c.on('error', (e) => {
@@ -710,6 +763,7 @@ function attachConn(c) {
       sendClipboardText(text, c.peer);
     }
     flushOutbox(c.peer);
+    updateActiveBar();
   });
 }
 
@@ -739,7 +793,7 @@ function connectTo(code) {
   attachConn(c);
 }
 
-// Multi-send (feature 3): send to several trusted contacts in turn.
+// Multi-send (feature 3): send to several contacts in turn.
 // Live if a peer is online, queued if not; auto-advances to the next.
 function startMultiSend(targets) {
   multiSendTargets = [...targets];
@@ -894,9 +948,10 @@ function onFileMeta(meta, c) {
     log('Declined ' + meta.name);
     addHistory({ direction: 'received', name: meta.name, size: meta.size, peer: peerCode, peerName: contactName(peerCode), status: 'declined', fileId: meta.id, path: meta.path });
   });
+  // v1.3: any contact is trusted, so files from a contact always
+  // auto-accept. The checkbox only covers devices that aren't contacts.
   const sender = c ? getContact(c.peer) : null;
-  const trustedAuto = sender && sender.trusted && sender.autoAccept;
-  if ($('autoAccept').checked || trustedAuto) acceptFile(meta.id);
+  if ($('autoAccept').checked || sender) acceptFile(meta.id);
 }
 
 function acceptFile(id) {
@@ -1045,7 +1100,7 @@ async function queueFiles(entries) {
   else if (livePeers.length > 1) targets = livePeers.slice(0, 1);
 
   if (!targets.length) {
-    alert('Pick a recipient first — enter their code above, tick a trusted contact in “Send to” / multi-send, or connect to a device, then drop the file again.');
+    alert('Pick a recipient first — enter their code above, tick a contact in “Send to” / multi-send, or connect to a device, then drop the file again.');
     return;
   }
   // Folder announcement for the receiver (feature 1)
@@ -1286,8 +1341,11 @@ function addMessage(text, who) {
 function sendText() {
   const v = $('msgInput').value.trim();
   if (!v) return;
-  if (!conn || !conn.open) { alert('Not connected yet.'); return; }
-  conn.send({ type: 'text', text: v });
+  // Chat goes to the selected contact when connected to them.
+  const targetConn = (selectedContact && getConn(selectedContact) && getConn(selectedContact).open)
+    ? getConn(selectedContact) : conn;
+  if (!targetConn || !targetConn.open) { alert('Not connected yet — tap a contact above first.'); return; }
+  targetConn.send({ type: 'text', text: v });
   addMessage(v, 'me');
   $('msgInput').value = '';
 }
@@ -1354,7 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!conns.size) {
       $('connectBtn').disabled = false;
       $('disconnectBtn').disabled = true;
-      setStatus('Online — ready. Paste the other device’s code to connect, or tap a trusted contact.', true);
+      setStatus('Online — ready. Paste the other device’s code to connect, or tap a contact.', true);
     }
   });
   $('copyBtn').addEventListener('click', async () => {
@@ -1363,7 +1421,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setTimeout(() => { $('copyBtn').textContent = 'Copy code'; }, 2000);
   });
   $('newIdBtn').addEventListener('click', async () => {
-    if (!confirm('Get a fresh device code? The old code will stop working — update it in your trusted contacts.')) return;
+    if (!confirm('Get a fresh device code? The old code will stop working — update it in your contacts.')) return;
     if (peer) peer.destroy();
     await chrome.storage.local.remove('leoShareId');
     location.reload();
@@ -1379,22 +1437,19 @@ document.addEventListener('DOMContentLoaded', () => {
     await chrome.storage.local.set({ leoShareAutoAccept: $('autoAccept').checked });
   });
 
-  $('saveTrustedBtn').addEventListener('click', async () => {
-    if (!conn || !conn.open) { alert('Connect to a device first, then save it as a trusted contact.'); return; }
-    const existing = getContact(conn.peer);
-    const name = prompt('Name for this device:', (existing && existing.name && existing.name !== conn.peer) ? existing.name : (myDisplayName ? 'My other device' : ''));
-    await upsertContact(conn.peer, { trusted: true, name: (name && name.trim()) || (existing && existing.name) || conn.peer, lastSeen: Date.now() });
-    log('Saved ' + conn.peer + ' as a trusted contact.');
-  });
   $('addContactBtn').addEventListener('click', async () => {
     const code = normaliseCode($('newContactCode').value);
     if (!code) { alert('Enter a device code first, e.g. leo-abc123.'); return; }
     if (code === myId) { alert('That is your own code.'); return; }
     const name = $('newContactName').value.trim() || code;
-    await upsertContact(code, { trusted: true, name });
+    await upsertContact(code, { name });
     $('newContactCode').value = ''; $('newContactName').value = '';
-    log('Added trusted contact ' + name + ' (' + code + ')');
+    log('Added contact ' + name + ' (' + code + ') — tap Chat or Send file to start.');
+    selectContact(code);
   });
+  $('activeChatBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'chat'); });
+  $('activeFileBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'file'); });
+  $('activeClipBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'clip'); });
 
   $('flushBtn').addEventListener('click', async () => {
     if (!conn || !conn.open) { alert('Not connected — connect to the recipient first, then queued files send automatically.'); return; }
@@ -1453,5 +1508,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sendMsgBtn').addEventListener('click', sendText);
   $('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
 
-  log('LeoShare v1.2.1 ready. Folders, resume, multi-send, clipboard, right-click send, history, QR and previews are on.');
+    log('LeoShare v1.3 ready. Contacts are simple now: add once and it is a contact — tap one to chat or send.');
 });

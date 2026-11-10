@@ -61,6 +61,10 @@
   footer { text-align: center; color: #64748b; font-size: 12px; line-height: 1.7; margin-top: 8px; }
   .empty { color: #64748b; font-size: 13px; text-align: center; padding: 14px 0 4px; }
   .contact-row, .queue-row, .missed-row, .hist-row, .clip-row { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 10px; }
+  .contact-row { cursor: pointer; }
+  .contact-row.selected { border-color: #38bdf8; background: #17233a; }
+  .active-bar { display: none; gap: 10px; align-items: center; flex-wrap: wrap; background: #0c2f42; border: 1px solid #38bdf8; border-radius: 10px; padding: 12px; margin-top: 12px; font-size: 14px; }
+  .active-bar b { color: #fff; }
   .contact-row .top, .queue-row .top { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center; }
   .contact-row .name { font-weight: 700; font-size: 14px; }
   .contact-row .code { font-family: ui-monospace, monospace; font-size: 12px; color: #94a3b8; }
@@ -88,7 +92,7 @@
 
   <div class="steps">
     <div class="step"><b>1 · On both devices</b>Install this extension, then open LeoShare on each one.</div>
-    <div class="step"><b>2 · Connect</b>Copy your code, scan the QR, or tap a saved trusted contact.</div>
+    <div class="step"><b>2 · Connect</b>Copy your code, scan the QR, or tap a contact below.</div>
     <div class="step"><b>3 · Send</b>Drop files or a whole folder. If the other side is offline, they queue — and both sides get a notification.</div>
   </div>
 
@@ -114,22 +118,25 @@
       <button id="connectBtn">Connect</button>
       <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
     </div>
-    <div class="row-actions">
-      <button id="saveTrustedBtn" class="ghost small">⭐ Save connected device as trusted contact</button>
-    </div>
-    <label class="check"><input type="checkbox" id="autoAccept"> Auto-accept files from the connected device (no Accept tap needed)</label>
+    <label class="check"><input type="checkbox" id="autoAccept"> Auto-accept files even from devices that aren't contacts (files from contacts always auto-accept)</label>
     <p class="hint">Tip: a code is just 6 characters after <b>leo-</b>. Typing only the 6 characters works too — LeoShare adds the prefix for you.</p>
   </div>
 
   <div class="card">
-    <h2>⭐ Trusted contacts <span style="color:#94a3b8;font-weight:400;font-size:12px">— saved on this browser, survives restarts</span></h2>
+    <h2>Contacts <span style="color:#94a3b8;font-weight:400;font-size:12px">— saved on this browser, survives restarts</span></h2>
     <div class="connect-row">
       <input type="text" id="newContactCode" placeholder="leo-xxxxxx" autocomplete="off" spellcheck="false" style="flex:1">
       <input type="text" id="newContactName" placeholder="Name — e.g. Work PC, Moto phone" autocomplete="off" style="flex:1;font-family:inherit">
       <button id="addContactBtn" class="ghost">Add contact</button>
     </div>
-    <p class="hint">Trusted contacts get one-tap Connect, and can auto-accept files from you without an Accept tap. Untrust / remove anytime below — nothing is shared with anyone else.</p>
-    <div id="contactList"><p class="empty">No trusted contacts yet. Connect once, then tap “Save as trusted”, or add one above.</p></div>
+    <p class="hint">Add a device once — that's it, it's a contact. Tap a contact to connect, then chat or send files to them. Connecting to a new device adds it here automatically.</p>
+    <div id="contactList"><p class="empty">No contacts yet. Connect to a device once, or add one above.</p></div>
+    <div class="active-bar" id="activeBar">
+      <span id="activeBarText"><b>No contact selected</b></span>
+      <button id="activeChatBtn" class="small">💬 Chat</button>
+      <button id="activeFileBtn" class="small">📁 Send file</button>
+      <button id="activeClipBtn" class="small ghost">📋 Clipboard</button>
+    </div>
   </div>
 
   <div class="card">
@@ -148,8 +155,9 @@
       <label style="font-size:13px;color:#cbd5e1;align-self:center">Send to:</label>
       <select id="sendToSelect" style="flex:1"><option value="">Connected device</option></select>
     </div>
-    <div class="hint" style="margin:0 0 10px">Multi-send — tick several trusted contacts, drop files once, LeoShare sends to each in turn (live if they're online, queued if not):</div>
-    <div class="multi-list" id="multiSendList"><span style="font-size:12px;color:#64748b">No trusted contacts yet.</span></div>
+    <p class="hint" id="activeHint" style="margin:0 0 10px">No contact selected yet — tap a contact above.</p>
+    <div class="hint" style="margin:0 0 10px">Multi-send — tick several contacts, drop files once, LeoShare sends to each in turn (live if they're online, queued if not):</div>
+    <div class="multi-list" id="multiSendList"><span style="font-size:12px;color:#64748b">No contacts yet.</span></div>
     <div id="dropZone">
       <div class="big">📁</div>
       <p><b>Drop files or a whole folder here</b> or click to choose<br><small>Folders keep their structure (shown as a path, e.g. Photos/IMG_01.jpg). Large files are sent in small pieces — pause, resume, or cancel anytime.</small></p>
@@ -200,6 +208,7 @@
 
   <div class="card">
     <h2>Quick message</h2>
+    <p class="hint" id="chatHint" style="margin:0 0 10px">Pick a contact above first, then type here.</p>
     <div class="msg-row">
       <input type="text" id="msgInput" placeholder="Send a short note to the other device…" autocomplete="off">
       <button id="sendMsgBtn" class="ghost">Send</button>
@@ -212,7 +221,7 @@
     <div class="log" id="log"></div>
   </div>
 
-  <footer>LeoShare v1.2.1 · Peer-to-peer via WebRTC (PeerJS signalling only) · Files are encrypted in transit (DTLS) and never stored on any server.<br>Queue lives on the sender's device only. If a connection fails, both sides: reload this tab, copy the fresh code, and reconnect.</footer>
+  <footer>LeoShare v1.3 · Peer-to-peer via WebRTC (PeerJS signalling only) · Files are encrypted in transit (DTLS) and never stored on any server.<br>Queue lives on the sender's device only. If a connection fails, both sides: reload this tab, copy the fresh code, and reconnect.</footer>
 </div>
 <script src="lib/peerjs.min.js"></script>
 <script src="lib/jszip.min.js"></script>
