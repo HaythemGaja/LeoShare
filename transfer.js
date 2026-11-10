@@ -36,6 +36,9 @@ let flushingFor = null;
 const connectingPeers = new Set(); // codes with a connect attempt in flight
 const lastConnectAttemptAt = {};   // code -> timestamp, connect cooldown
 const flushRetryTimers = new Set();
+const flushRetryCount = {};        // code -> retries used (cap ~60 s)
+const iceStateByPeer = {};         // code -> last ICE connection state
+const iceCandidatesByPeer = {};    // code -> {host, srflx, relay}
 function isUsable(code) { const c = getConn(code); return !!(c && c.open); }
 // Wait for a peer's data channel to actually open (up to ms). Returns true
 // if it opened, false on timeout / close. This is the v1.2.1 fix: v1.2
@@ -43,7 +46,7 @@ function isUsable(code) { const c = getConn(code); return !!(c && c.open); }
 // until the DataChannel opens, so files were queued as "offline" while
 // the UI said Connected.
 async function waitForOpen(code, ms) {
-  const deadline = Date.now() + (ms || 8000);
+  const deadline = Date.now() + (ms || WAIT_OPEN_MS);
   while (Date.now() < deadline) {
     if (isUsable(code)) return true;
     if (!conns.has(code) && !connectingPeers.has(code)) return false;
@@ -60,7 +63,14 @@ let receivedBlobs = new Map(); // fileId -> {url, name, mime}
 let scanStream = null, scanTimer = null;
 
 // ---------- Helpers ----------
+// v1.4: suppress identical log lines repeated within 10 s — the v1.3
+// field log was full of "Already connecting…" / "Waiting for the data
+// channel…" repeated every few seconds, which hid the real signal.
+const lastLogAt = {};
 function log(msg, cls) {
+  const now = Date.now();
+  if (lastLogAt[msg] && now - lastLogAt[msg] < 10000) return;
+  lastLogAt[msg] = now;
   const t = new Date().toLocaleTimeString();
   const div = document.createElement('div');
   if (cls) div.className = cls;
@@ -68,6 +78,9 @@ function log(msg, cls) {
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
 }
+// How long to wait for a data channel to open before treating the peer
+// as offline. v1.3 used 8 s; TURN relay gathering can take longer.
+const WAIT_OPEN_MS = 20000;
 function fmtBytes(n) {
   if (n < 1024) return n + ' B';
   if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
@@ -351,7 +364,9 @@ function updateActiveBar() {
   if (bar) {
     bar.style.display = 'flex';
     const t = $('activeBarText');
-    if (t) t.innerHTML = 'Chatting with <b>' + escapeHtml(name) + '</b>' + (isUsable(selectedContact) ? ' ● connected' : ' — connecting…');
+    // Show the ICE state here instead of repeating "connecting…" —
+    // that is new information, not a repeat of the status line.
+    if (t) t.innerHTML = 'Chatting with <b>' + escapeHtml(name) + '</b>' + (isUsable(selectedContact) ? ' ● connected' : ' — ICE: ' + (iceStateByPeer[selectedContact] || 'checking…'));
   }
   if (hint) hint.textContent = 'Sending to ' + name + '.';
   if (chatHint) chatHint.textContent = 'Messages go to ' + name + '.';
@@ -555,7 +570,7 @@ async function renderOutbox() {
       b.addEventListener('click', fn); actions.appendChild(b);
     };
     mk('Send now', '', async () => {
-      if (!getConn(r.to)) { log('Send now: connecting to ' + (r.toName || r.to) + '…'); connectTo(r.to); if (await waitForOpen(r.to, 8000)) await flushOutbox(r.to); else await renderOutbox(); return; }
+      if (!getConn(r.to)) { log('Send now: connecting to ' + (r.toName || r.to) + '…'); connectTo(r.to); if (await waitForOpen(r.to, WAIT_OPEN_MS)) await flushOutbox(r.to); else await renderOutbox(); return; }
       if (!getConn(r.to).open) { alert('Still connecting to ' + (r.toName || r.to) + ' — the data channel isn’t open yet. Wait a few seconds; queued files send automatically when it opens.'); return; }
       await flushOutbox(r.to);
     }, r.status === 'delivered');
@@ -605,11 +620,17 @@ async function flushOutbox(peerCode) {
   if (!c) return;
   if (!c.open) {
     // Data channel still opening — the open handler flushes when it
-    // opens. Schedule one retry in case that handler already ran.
+    // opens. Keep retrying every 5 s while it is still connecting
+    // (up to ~60 s) in case that handler already ran.
     log('Waiting for the data channel to ' + contactName(peerCode) + ' to open before sending queued files…');
     if (!flushRetryTimers.has(peerCode)) {
       flushRetryTimers.add(peerCode);
-      setTimeout(() => { flushRetryTimers.delete(peerCode); flushOutbox(peerCode); }, 2000);
+      flushRetryCount[peerCode] = (flushRetryCount[peerCode] || 0) + 1;
+      setTimeout(() => {
+        flushRetryTimers.delete(peerCode);
+        if (connectingPeers.has(peerCode) && flushRetryCount[peerCode] < 12) flushOutbox(peerCode);
+        else flushRetryCount[peerCode] = 0;
+      }, 5000);
     }
     return;
   }
@@ -672,7 +693,30 @@ async function initPeer() {
   await loadPartials();
   await renderOutbox();
   await consumePendingSend();
-  peer = new Peer(myId, { debug: 0 });
+  // v1.4: ICE servers. v1.0–1.3 used PeerJS's default (STUN only), so
+  // when both browsers sat behind symmetric NAT / a corporate firewall
+  // that blocks UDP, there was no path at all and the data channel
+  // never opened — signalling worked, ICE never connected. The TURN
+  // relay below (Metered Open Relay, public demo credentials) gives
+  // those networks a relay path over TCP/TLS port 443. The relay only
+  // forwards DTLS-encrypted packets — it cannot read your files.
+  // Honest limit: those demo credentials are shared and may be
+  // rate-limited or revoked by the provider. If they don't work for
+  // you, the next step is your own TURN server (e.g. coturn on the
+  // OptiPlex) — LeoShare will need its address + username + password.
+  peer = new Peer(myId, {
+    debug: 0,
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:openrelay.metered.ca:80' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+      ]
+    }
+  });
   peer.on('open', (id) => {
     setStatus('Online — ready. Paste the other device’s code to connect, or tap a contact.', true);
     log('Online as ' + id, 'ok');
@@ -725,6 +769,45 @@ function attachConn(c) {
   // Do NOT say "Connected" here — the data channel is not open yet.
   setStatus('Connecting to ' + contactName(c.peer) + '… (opening data channel)', false);
   log('Connecting to ' + c.peer + '… (waiting for data channel to open)');
+  // v1.4 ICE diagnostics: watch the real connection underneath, so the
+  // log says WHERE it stops — checking, failed, disconnected, or no
+  // relay candidate at all — instead of just "waiting…".
+  try {
+    const pc = c.peerConnection;
+    if (pc) {
+      iceCandidatesByPeer[c.peer] = { host: 0, srflx: 0, relay: 0 };
+      pc.onicecandidate = (e) => {
+        if (!e || !e.candidate) return;
+        const cand = String(e.candidate.candidate || '');
+        const m = cand.match(/ typ (\w+)/);
+        const type = m ? m[1] : 'unknown';
+        const counts = iceCandidatesByPeer[c.peer] || (iceCandidatesByPeer[c.peer] = { host: 0, srflx: 0, relay: 0 });
+        if (counts[type] !== undefined) counts[type]++;
+      };
+      pc.onicecandidateerror = (e) => {
+        log('ICE candidate error for ' + contactName(c.peer) + ': ' + (e.errorCode || e.errorText || 'unknown') + ' — the TURN relay may have refused the connection.', 'err');
+      };
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        iceStateByPeer[c.peer] = s;
+        log('ICE to ' + contactName(c.peer) + ': ' + s);
+        if (s === 'failed' || s === 'disconnected') {
+          setStatus('Connection to ' + contactName(c.peer) + ' failed at the network step (ICE ' + s + '). Try again, or check whether the network blocks WebRTC.', false);
+        }
+        updateActiveBar();
+      };
+      pc.onconnectionstatechange = () => log('Connection state to ' + contactName(c.peer) + ': ' + pc.connectionState);
+    }
+  } catch (e) {}
+  // 30 s watchdog: if the channel still isn't open, say so once, with
+  // the ICE state and candidate census — that is the diagnosis.
+  setTimeout(() => {
+    if (getConn(c.peer) === c && !c.open) {
+      const counts = iceCandidatesByPeer[c.peer] || { host: 0, srflx: 0, relay: 0 };
+      log('Still no data channel to ' + contactName(c.peer) + ' after 30 s — ICE: ' + (iceStateByPeer[c.peer] || 'unknown') + ', candidates: host ' + counts.host + ' / server-reflexive ' + counts.srflx + ' / relay ' + counts.relay + '. Relay 0 means the TURN relay did not answer either.', 'err');
+      setStatus('Still connecting to ' + contactName(c.peer) + '… ICE: ' + (iceStateByPeer[c.peer] || 'unknown') + ' — see the Activity log.', false);
+    }
+  }, 30000);
   c.on('data', (data) => onData(data, c));
   c.on('close', async () => {
     log('Connection to ' + c.peer + ' closed. Queued files stay queued.');
@@ -753,8 +836,9 @@ function attachConn(c) {
   c.on('open', async () => {
     connectingPeers.delete(c.peer);
     connectionOpenedAt = Date.now();
+    const counts = iceCandidatesByPeer[c.peer] || { host: 0, srflx: 0, relay: 0 };
     setStatus('Connected to ' + contactName(c.peer) + ' ✓ — data channel open, you can send files now.', true);
-    log('Data channel open to ' + c.peer + ' — ready to send.', 'ok');
+    log('Data channel open to ' + c.peer + ' — ready to send. ICE: ' + (iceStateByPeer[c.peer] || 'connected') + ', relay candidates: ' + counts.relay + (counts.relay ? ' (via TURN relay)' : ' (direct)'), 'ok');
     await upsertContact(c.peer, { lastSeen: Date.now() });
     try { c.send({ type: 'hello', from: myId, displayName: myDisplayName }); } catch (e) {}
     if (pendingClipboard && (pendingClipboard.target === 'connected' || pendingClipboard.target === c.peer)) {
@@ -1113,12 +1197,12 @@ async function queueFiles(entries) {
     let isLive = isUsable(target);
     if (!isLive && (conns.has(target) || connectingPeers.has(target))) {
       log('Waiting for the data channel to ' + contactName(target) + ' to open…');
-      isLive = await waitForOpen(target, 8000);
+      isLive = await waitForOpen(target, WAIT_OPEN_MS);
     }
     if (!isLive && !conns.has(target) && !connectingPeers.has(target)) {
       log('Connecting to ' + contactName(target) + ' to deliver…');
       connectTo(target);
-      isLive = await waitForOpen(target, 8000);
+      isLive = await waitForOpen(target, WAIT_OPEN_MS);
     }
     if (isLive) {
       const c = getConn(target);
@@ -1278,12 +1362,12 @@ async function sendClipboardText(text, target) {
   let c = getConn(targetCode);
   if (c && !c.open) {
     log('Waiting for the data channel to ' + contactName(targetCode) + ' to open for clipboard…');
-    if (await waitForOpen(targetCode, 8000)) c = getConn(targetCode);
+    if (await waitForOpen(targetCode, WAIT_OPEN_MS)) c = getConn(targetCode);
   }
   if (!c) {
     log('Connecting to ' + contactName(targetCode) + ' to send clipboard…');
     connectTo(targetCode);
-    if (await waitForOpen(targetCode, 8000)) c = getConn(targetCode);
+    if (await waitForOpen(targetCode, WAIT_OPEN_MS)) c = getConn(targetCode);
   }
   if (!c || !c.open) {
     pendingClipboard = { text, target: targetCode };
@@ -1444,7 +1528,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const name = $('newContactName').value.trim() || code;
     await upsertContact(code, { name });
     $('newContactCode').value = ''; $('newContactName').value = '';
-    log('Added contact ' + name + ' (' + code + ') — tap Chat or Send file to start.');
+    log('Added contact ' + name + ' (' + code + ').');
     selectContact(code);
   });
   $('activeChatBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'chat'); });
@@ -1508,5 +1592,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sendMsgBtn').addEventListener('click', sendText);
   $('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
 
-    log('LeoShare v1.3 ready. Contacts are simple now: add once and it is a contact — tap one to chat or send.');
+      log('LeoShare v1.4 ready. TURN relay + ICE diagnostics are on — the log now says where a connection stops.');
 });

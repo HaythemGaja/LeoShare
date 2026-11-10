@@ -14,6 +14,36 @@ No email. No Google Drive. Nothing is uploaded to any server.
 - Files are sent in 16 KB pieces with progress, speed, and Accept/Decline
   on the receiving side. Received files download automatically.
 
+## What's new in v1.4 (TURN relay + ICE diagnostics)
+
+The v1.3 field log showed the real problem: signalling worked on both
+sides, but the data channel **never opened** — 30+ seconds of
+"waiting for data channel to open", then the file queued as offline.
+v1.0–1.3 used PeerJS's default ICE (STUN only), so when both browsers
+sit behind symmetric NAT / a corporate firewall that blocks UDP, there
+is no path at all.
+
+- **TURN relay added** (Metered Open Relay, public demo credentials,
+  UDP + TCP + TLS on port 443). When a direct path fails, the browsers
+  can now connect through the relay. The relay only forwards
+  DTLS-encrypted packets — it cannot read your files. Honest limit:
+  those demo credentials are shared and may be rate-limited or
+  revoked by the provider; if they don't work, the next step is your
+  own TURN server (e.g. coturn on the OptiPlex).
+- **ICE diagnostics in the Activity log.** The log now shows the real
+  connection state underneath: `ICE: checking / connected / failed /
+  disconnected`, candidate errors, and after 30 s a census —
+  `host n / server-reflexive n / relay n`. Relay 0 means the TURN
+  relay didn't answer either. The "Chatting with …" bar shows the
+  ICE state instead of repeating "connecting…".
+- **Less repetition.** Identical log lines are shown once per 10 s,
+  and the wait for a channel to open is now 20 s (TURN gathering
+  takes longer than a direct attempt).
+
+Still untested live: no Chrome on this VM, so whether the relay
+actually gets through your two networks is for your next test — the
+new ICE lines will say exactly where it stops.
+
 ## What's new in v1.3 (simpler contacts, contact-first chat)
 
 - **Contacts are simple now.** Add a device once and it IS a contact —
@@ -191,4 +221,4 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - `lib/jsqr.js` — jsQR 1.4.0, for Scan QR
 - `icons/` — extension icons
 
-Version 1.3 — built 2026-11-10.
+Version 1.4 — built 2026-11-10.
