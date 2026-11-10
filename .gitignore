@@ -1,0 +1,14 @@
+# Build / packaged outputs
+*.zip
+*.crx
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+# Secrets — never commit these
+*.pem
+*.key
+*.keystore
+*.jks
+.env
+.env.*

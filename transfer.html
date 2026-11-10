@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeoShare — Send Files Between Browsers</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f1f5f9; min-height: 100vh; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 28px 20px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  h1 { font-size: 30px; } h1 span { color: #38bdf8; }
+  .tag { font-size: 12px; color: #94a3b8; }
+  p.lead { color: #cbd5e1; line-height: 1.6; margin-bottom: 20px; font-size: 14px; }
+  p.lead b { color: #fff; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin-bottom: 12px; }
+  .status-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #f59e0b; margin-right: 6px; vertical-align: middle; }
+  .status-dot.on { background: #22c55e; } .status-dot.off { background: #ef4444; }
+  #statusText { font-size: 14px; }
+  .code-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  .code { font-family: ui-monospace, monospace; font-size: 22px; font-weight: 800; letter-spacing: .12em; background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 10px 16px; }
+  button { border: 0; border-radius: 9px; padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer; background: #0284c7; color: #fff; }
+  button:hover:not(:disabled) { background: #0369a1; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: #334155; } button.ghost:hover { background: #475569; }
+  button.danger { background: #b91c1c; } button.danger:hover { background: #991b1b; }
+  button.small { padding: 7px 12px; font-size: 13px; }
+  input[type=text] { flex: 1; min-width: 180px; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 9px; padding: 11px 12px; font-size: 15px; font-family: ui-monospace, monospace; }
+  input[type=text]:focus { outline: 2px solid #0284c7; }
+  select { background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 9px; padding: 11px 10px; font-size: 14px; }
+  textarea { width: 100%; background: #0f172a; border: 1px solid #334155; color: #fff; border-radius: 9px; padding: 11px 12px; font-size: 14px; font-family: inherit; min-height: 74px; resize: vertical; }
+  .connect-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .hint { font-size: 12px; color: #94a3b8; margin-top: 10px; line-height: 1.6; }
+  #dropZone { border: 2px dashed #475569; border-radius: 14px; padding: 34px 20px; text-align: center; cursor: pointer; transition: .15s; }
+  #dropZone:hover, #dropZone.over { border-color: #38bdf8; background: #0f172a; }
+  #dropZone .big { font-size: 34px; margin-bottom: 8px; }
+  #dropZone p { color: #cbd5e1; font-size: 14px; line-height: 1.6; }
+  #dropZone p small { color: #94a3b8; }
+  .file-item { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 10px; }
+  .file-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+  .file-head .name { font-weight: 700; word-break: break-all; }
+  .file-head .meta { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+  .bar { height: 8px; background: #334155; border-radius: 99px; margin-top: 10px; overflow: hidden; }
+  .bar > div { height: 100%; background: #38bdf8; width: 0%; transition: width .2s; }
+  .bar.done > div { background: #22c55e; }
+  .file-foot { font-size: 12px; color: #94a3b8; margin-top: 7px; display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .offer { border-color: #f59e0b !important; }
+  .log { font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.7; color: #94a3b8; max-height: 180px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  .log .ok { color: #4ade80; } .log .err { color: #f87171; }
+  .msg-row { display: flex; gap: 10px; }
+  .msg-row input { flex: 1; font-family: inherit; }
+  #messages { margin-top: 10px; font-size: 14px; line-height: 1.6; }
+  #messages div { background: #0f172a; border-radius: 8px; padding: 8px 10px; margin-top: 6px; word-break: break-word; }
+  #messages .them { border-left: 3px solid #38bdf8; }
+  #messages .me { border-left: 3px solid #22c55e; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .step { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; font-size: 13px; line-height: 1.6; color: #cbd5e1; }
+  .step b { color: #fff; display: block; margin-bottom: 4px; }
+  label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; color: #cbd5e1; margin-top: 12px; cursor: pointer; }
+  footer { text-align: center; color: #64748b; font-size: 12px; line-height: 1.7; margin-top: 8px; }
+  .empty { color: #64748b; font-size: 13px; text-align: center; padding: 14px 0 4px; }
+  .contact-row, .queue-row, .missed-row, .hist-row, .clip-row { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 12px; margin-top: 10px; }
+  .contact-row .top, .queue-row .top { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .contact-row .name { font-weight: 700; font-size: 14px; }
+  .contact-row .code { font-family: ui-monospace, monospace; font-size: 12px; color: #94a3b8; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 700; background: #14532d; color: #4ade80; border-radius: 99px; padding: 3px 8px; margin-left: 6px; vertical-align: middle; }
+  .badge.offline { background: #334155; color: #94a3b8; }
+  .badge.queued { background: #78350f; color: #fbbf24; }
+  .row-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .row-meta { font-size: 12px; color: #94a3b8; margin-top: 6px; line-height: 1.6; }
+  .missed-row { border-color: #f59e0b; }
+  .preview { margin-top: 10px; }
+  .preview img { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; }
+  .preview video, .preview audio { max-width: 100%; width: 100%; }
+  .preview pre { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 10px; font-size: 12px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; color: #cbd5e1; }
+  #qrBox { margin-top: 12px; display: none; background: #fff; padding: 12px; border-radius: 10px; width: fit-content; }
+  #qrBox img, #qrBox canvas { display: block; }
+  #scanVideo { width: 100%; max-height: 260px; border-radius: 10px; background: #000; display: none; margin-top: 12px; }
+  .multi-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .multi-list label { display: flex; gap: 6px; align-items: center; font-size: 13px; background: #0f172a; border: 1px solid #334155; border-radius: 99px; padding: 7px 12px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Leo<span>Share</span></h1><span class="tag">browser → browser · no email · no Drive · no upload</span></header>
+  <p class="lead">Files go <b>directly</b> from this browser to the other device over an encrypted WebRTC connection. The signalling server only introduces the two browsers — it never sees your files. <b>Keep this tab open</b> until a live transfer finishes. Files you queue while the other side is offline wait <b>on this device</b> (not on a server) and send automatically when they come online.</p>
+
+  <div class="steps">
+    <div class="step"><b>1 · On both devices</b>Install this extension, then open LeoShare on each one.</div>
+    <div class="step"><b>2 · Connect</b>Copy your code, scan the QR, or tap a saved trusted contact.</div>
+    <div class="step"><b>3 · Send</b>Drop files or a whole folder. If the other side is offline, they queue — and both sides get a notification.</div>
+  </div>
+
+  <div class="card">
+    <h2><span class="status-dot" id="dot"></span><span id="statusText">Starting…</span></h2>
+    <div class="code-row">
+      <span>Your code:</span>
+      <span class="code" id="myCode">…</span>
+      <button class="ghost small" id="copyBtn">Copy code</button>
+      <button class="ghost small" id="newIdBtn" title="Get a fresh code">New code</button>
+      <button class="ghost small" id="showQrBtn">Show QR</button>
+      <button class="ghost small" id="scanQrBtn">Scan QR</button>
+    </div>
+    <div id="qrBox"></div>
+    <video id="scanVideo" playsinline muted></video>
+    <div class="row-actions" id="scanActions" style="display:none"><button id="stopScanBtn" class="ghost small">Stop scanning</button></div>
+    <p class="hint" id="qrHint" style="display:none">Point the other device's camera at this QR, or scan their QR with the button above — it fills in their code for you.</p>
+    <div class="connect-row" style="margin-top:14px">
+      <input type="text" id="displayName" placeholder="Your display name (e.g. Haythem's laptop)" autocomplete="off" style="font-family:inherit">
+    </div>
+    <div class="connect-row" style="margin-top:14px">
+      <input type="text" id="peerInput" placeholder="Paste the other device's code — e.g. leo-abc123" autocomplete="off" spellcheck="false">
+      <button id="connectBtn">Connect</button>
+      <button id="disconnectBtn" class="danger" disabled>Disconnect</button>
+    </div>
+    <div class="row-actions">
+      <button id="saveTrustedBtn" class="ghost small">⭐ Save connected device as trusted contact</button>
+    </div>
+    <label class="check"><input type="checkbox" id="autoAccept"> Auto-accept files from the connected device (no Accept tap needed)</label>
+    <p class="hint">Tip: a code is just 6 characters after <b>leo-</b>. Typing only the 6 characters works too — LeoShare adds the prefix for you.</p>
+  </div>
+
+  <div class="card">
+    <h2>⭐ Trusted contacts <span style="color:#94a3b8;font-weight:400;font-size:12px">— saved on this browser, survives restarts</span></h2>
+    <div class="connect-row">
+      <input type="text" id="newContactCode" placeholder="leo-xxxxxx" autocomplete="off" spellcheck="false" style="flex:1">
+      <input type="text" id="newContactName" placeholder="Name — e.g. Work PC, Moto phone" autocomplete="off" style="flex:1;font-family:inherit">
+      <button id="addContactBtn" class="ghost">Add contact</button>
+    </div>
+    <p class="hint">Trusted contacts get one-tap Connect, and can auto-accept files from you without an Accept tap. Untrust / remove anytime below — nothing is shared with anyone else.</p>
+    <div id="contactList"><p class="empty">No trusted contacts yet. Connect once, then tap “Save as trusted”, or add one above.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>📥 Queued — waiting for the other device <span style="color:#94a3b8;font-weight:400;font-size:12px" id="queueCount"></span></h2>
+    <p class="hint">If the other device is offline, files dropped below are stored <b>here, in this browser</b> (IndexedDB — they survive closing this tab and restarting Chrome). They send automatically the next time that device connects. Nothing is uploaded to a server, so the file can only arrive when both browsers are open at the same time.</p>
+    <div id="outboxList"><p class="empty">Queue is empty.</p></div>
+    <div class="row-actions">
+      <button id="flushBtn" class="ghost small">Send queued now (if connected)</button>
+      <button id="clearDeliveredBtn" class="ghost small">Clear delivered / declined</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Send files &amp; folders</h2>
+    <div class="connect-row" style="margin-bottom:12px">
+      <label style="font-size:13px;color:#cbd5e1;align-self:center">Send to:</label>
+      <select id="sendToSelect" style="flex:1"><option value="">Connected device</option></select>
+    </div>
+    <div class="hint" style="margin:0 0 10px">Multi-send — tick several trusted contacts, drop files once, LeoShare sends to each in turn (live if they're online, queued if not):</div>
+    <div class="multi-list" id="multiSendList"><span style="font-size:12px;color:#64748b">No trusted contacts yet.</span></div>
+    <div id="dropZone">
+      <div class="big">📁</div>
+      <p><b>Drop files or a whole folder here</b> or click to choose<br><small>Folders keep their structure (shown as a path, e.g. Photos/IMG_01.jpg). Large files are sent in small pieces — pause, resume, or cancel anytime.</small></p>
+      <input type="file" id="fileInput" multiple style="display:none">
+      <input type="file" id="folderInput" webkitdirectory style="display:none">
+    </div>
+    <div class="row-actions">
+      <button id="chooseFilesBtn" class="ghost small">Choose files…</button>
+      <button id="chooseFolderBtn" class="ghost small">Choose a folder…</button>
+    </div>
+    <div id="sendList"><p class="empty">No files sent yet in this session.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>Received files</h2>
+    <div id="folderList"></div>
+    <div id="recvList"><p class="empty">Nothing received yet. Incoming files will ask you to Accept here — with a preview first.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>📋 Cross-device clipboard</h2>
+    <textarea id="clipText" placeholder="Type text or a link here, then send it to the connected device…"></textarea>
+    <div class="row-actions">
+      <button id="sendClipBtn">Send clipboard to device</button>
+      <button id="pasteClipBtn" class="ghost">Paste from my clipboard</button>
+      <button id="sendTabBtn" class="ghost">Send current tab URL</button>
+    </div>
+    <p class="hint">Received text/links appear here too, with Copy and Open buttons. Right-click any selected text, link, image or page in Chrome and choose “Send with LeoShare” to send it the same way.</p>
+    <div id="clipboardList"><p class="empty">Nothing shared yet.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>🕘 Transfer history</h2>
+    <div class="connect-row">
+      <input type="text" id="historySearch" placeholder="Search by name, device…" autocomplete="off" style="font-family:inherit">
+      <select id="historyFilter"><option value="all">All</option><option value="sent">Sent</option><option value="received">Received</option></select>
+      <button id="clearHistoryBtn" class="ghost small">Clear history</button>
+    </div>
+    <div id="historyList"><p class="empty">No transfers yet.</p></div>
+  </div>
+
+  <div class="card">
+    <h2>🔔 Missed while you were offline</h2>
+    <p class="hint">When someone tried to send you a file while this browser was offline / closed, you see it here the next time you connect to them — with a notification.</p>
+    <div id="missedList"><p class="empty">No missed transfers.</p></div>
+    <div class="row-actions"><button id="clearMissedBtn" class="ghost small">Clear missed list</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Quick message</h2>
+    <div class="msg-row">
+      <input type="text" id="msgInput" placeholder="Send a short note to the other device…" autocomplete="off">
+      <button id="sendMsgBtn" class="ghost">Send</button>
+    </div>
+    <div id="messages"></div>
+  </div>
+
+  <div class="card">
+    <h2>Activity</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+  <footer>LeoShare v1.2 · Peer-to-peer via WebRTC (PeerJS signalling only) · Files are encrypted in transit (DTLS) and never stored on any server.<br>Queue lives on the sender's device only. If a connection fails, both sides: reload this tab, copy the fresh code, and reconnect.</footer>
+</div>
+<script src="lib/peerjs.min.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="lib/qrcode.min.js"></script>
+<script src="lib/jsqr.js"></script>
+<script src="transfer.js"></script>
+</body>
+</html>
