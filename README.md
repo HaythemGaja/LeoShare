@@ -14,6 +14,34 @@ No email. No Google Drive. Nothing is uploaded to any server.
 - Files are sent in 16 KB pieces with progress, speed, and Accept/Decline
   on the receiving side. Received files download automatically.
 
+## What's new in v1.5 (staticauth TURN — the v1.4 relay was dead)
+
+The v1.4 log proved it: **ICE error 701, relay 0 on both sides**.
+v1.4 used the static pair `openrelayproject` / `openrelayproject`
+against `openrelay.metered.ca` — that pair is stale, Metered no
+longer accepts it, so every TURN allocate failed.
+
+- **Staticauth TURN.** LeoShare now uses the mechanism Metered still
+  documents: `staticauth.openrelay.metered.ca`, with a time-limited
+  credential computed fresh on every connect —
+  username `<expiry>:leoshare`, credential
+  `base64(HMAC-SHA1("openrelayprojectsecret", username))`, valid 24 h.
+  The secret is Metered's own published shared value (their Nextcloud
+  Talk example), not a private password.
+- **Your own TURN, in the app.** A new Relay card lets you paste a
+  custom TURN server + username + password (e.g. a free Metered
+  account: Dashboard → TURN Servers → generate credentials). It is
+  used first, the demo relay stays as fallback, and it is saved only
+  on your browser — never in the repo. A change needs a tab reload.
+- **Clearer errors.** 701 now reads "TURN allocation failed (relay
+  refused / unreachable)", and the 30 s watchdog also reports the
+  ICE gathering state.
+
+Still untested live: this VM blocks UDP, so a real TURN allocate
+could not be run here — whether the staticauth relay grants
+allocations on your two networks is for your next test. The new ICE
+lines will say so: look for `relay 1` or more, and `ICE: connected`.
+
 ## What's new in v1.4 (TURN relay + ICE diagnostics)
 
 The v1.3 field log showed the real problem: signalling worked on both
@@ -221,4 +249,4 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - `lib/jsqr.js` — jsQR 1.4.0, for Scan QR
 - `icons/` — extension icons
 
-Version 1.4 — built 2026-11-10.
+Version 1.5 — built 2026-11-10.

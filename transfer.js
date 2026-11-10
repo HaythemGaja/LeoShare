@@ -681,6 +681,61 @@ async function flushOutbox(peerCode) {
   }
 }
 
+// ---------- TURN relay (v1.5) ----------
+// v1.4's TURN was dead: it used the static pair
+// username openrelayproject / credential openrelayproject against
+// openrelay.metered.ca. That pair is stale — Metered no longer accepts
+// it — so every allocate failed with ICE error 701 and relay 0 in the
+// field log. The no-signup mechanism Metered still documents is
+// STATIC AUTH on staticauth.openrelay.metered.ca: the client computes
+// a time-limited credential itself,
+//   username = "<unix expiry>:leoshare"
+//   credential = base64(HMAC-SHA1("openrelayprojectsecret", username))
+// (the standard coturn TURN REST API scheme, same as Nextcloud Talk
+// uses; the secret is Metered's own published shared value, not a
+// private password). Credentials expire after 24 h, so they are
+// computed fresh every time a Peer is created — never stored.
+let turnMode = 'staticauth (shared demo relay)';
+async function computeStaticAuthTurn() {
+  const expiry = Math.floor(Date.now() / 1000) + 86400;
+  const username = expiry + ':leoshare';
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('openrelayprojectsecret'), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(username));
+  const credential = btoa(String.fromCharCode(...new Uint8Array(sig)));
+  return { username, credential };
+}
+async function buildIceServers() {
+  const servers = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:openrelay.metered.ca:80' }
+  ];
+  // A custom TURN (your own Metered account, or coturn on the
+  // OptiPlex) wins if one is saved in Settings — see the Relay card.
+  let custom = null;
+  try {
+    const data = await chrome.storage.local.get('leoShareTurn');
+    custom = data.leoShareTurn || null;
+  } catch (e) {}
+  if (custom && custom.url && custom.username) {
+    turnMode = 'custom TURN (' + custom.url + ')';
+    servers.push({ urls: custom.url, username: custom.username, credential: custom.password || '' });
+  }
+  try {
+    const sa = await computeStaticAuthTurn();
+    for (const urls of [
+      'turn:staticauth.openrelay.metered.ca:80',
+      'turn:staticauth.openrelay.metered.ca:443',
+      'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
+      'turns:staticauth.openrelay.metered.ca:443'
+    ]) servers.push({ urls, username: sa.username, credential: sa.credential });
+    if (!custom) log('Relay: using the shared demo TURN (staticauth) — fresh credentials, valid 24 h.');
+    else log('Relay: custom TURN set, shared demo TURN kept as fallback.');
+  } catch (e) {
+    log('Could not compute TURN credentials — direct connection only. (' + (e.message || e) + ')', 'err');
+  }
+  return servers;
+}
+
 // ---------- Peer setup (multi-connection) ----------
 async function initPeer() {
   myId = await getMyId();
@@ -693,30 +748,9 @@ async function initPeer() {
   await loadPartials();
   await renderOutbox();
   await consumePendingSend();
-  // v1.4: ICE servers. v1.0–1.3 used PeerJS's default (STUN only), so
-  // when both browsers sat behind symmetric NAT / a corporate firewall
-  // that blocks UDP, there was no path at all and the data channel
-  // never opened — signalling worked, ICE never connected. The TURN
-  // relay below (Metered Open Relay, public demo credentials) gives
-  // those networks a relay path over TCP/TLS port 443. The relay only
-  // forwards DTLS-encrypted packets — it cannot read your files.
-  // Honest limit: those demo credentials are shared and may be
-  // rate-limited or revoked by the provider. If they don't work for
-  // you, the next step is your own TURN server (e.g. coturn on the
-  // OptiPlex) — LeoShare will need its address + username + password.
-  peer = new Peer(myId, {
-    debug: 0,
-    config: {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:openrelay.metered.ca:80' },
-        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' },
-        { urls: 'turns:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
-      ]
-    }
-  });
+  const iceServers = await buildIceServers();
+  log('Relay in use: ' + turnMode);
+  peer = new Peer(myId, { debug: 0, config: { iceServers } });
   peer.on('open', (id) => {
     setStatus('Online — ready. Paste the other device’s code to connect, or tap a contact.', true);
     log('Online as ' + id, 'ok');
@@ -785,7 +819,13 @@ function attachConn(c) {
         if (counts[type] !== undefined) counts[type]++;
       };
       pc.onicecandidateerror = (e) => {
-        log('ICE candidate error for ' + contactName(c.peer) + ': ' + (e.errorCode || e.errorText || 'unknown') + ' — the TURN relay may have refused the connection.', 'err');
+        // Chrome's 701 = TURN allocation failed: the relay refused the
+        // credentials, or is unreachable. 401/403 are the same story.
+        const code = e.errorCode || e.errorText || 'unknown';
+        const meaning = code === 701 ? 'TURN allocation failed (relay refused / unreachable)'
+          : code === 401 || code === 403 ? 'TURN credentials rejected'
+          : 'TURN/STUN error';
+        log('ICE candidate error for ' + contactName(c.peer) + ': ' + code + ' — ' + meaning + '. Relay in use: ' + turnMode + '.', 'err');
       };
       pc.oniceconnectionstatechange = () => {
         const s = pc.iceConnectionState;
@@ -804,8 +844,10 @@ function attachConn(c) {
   setTimeout(() => {
     if (getConn(c.peer) === c && !c.open) {
       const counts = iceCandidatesByPeer[c.peer] || { host: 0, srflx: 0, relay: 0 };
-      log('Still no data channel to ' + contactName(c.peer) + ' after 30 s — ICE: ' + (iceStateByPeer[c.peer] || 'unknown') + ', candidates: host ' + counts.host + ' / server-reflexive ' + counts.srflx + ' / relay ' + counts.relay + '. Relay 0 means the TURN relay did not answer either.', 'err');
-      setStatus('Still connecting to ' + contactName(c.peer) + '… ICE: ' + (iceStateByPeer[c.peer] || 'unknown') + ' — see the Activity log.', false);
+      let gathering = '';
+      try { gathering = c.peerConnection ? ', gathering: ' + c.peerConnection.iceGatheringState : ''; } catch (e) {}
+      log('Still no data channel to ' + contactName(c.peer) + ' after 30 s — ICE: ' + (iceStateByPeer[c.peer] || 'no state change yet') + gathering + ', candidates: host ' + counts.host + ' / server-reflexive ' + counts.srflx + ' / relay ' + counts.relay + '. Relay 0 means the TURN relay did not answer either. Relay in use: ' + turnMode + '.', 'err');
+      setStatus('Still connecting to ' + contactName(c.peer) + '… ICE: ' + (iceStateByPeer[c.peer] || 'no state change yet') + ' — see the Activity log.', false);
     }
   }, 30000);
   c.on('data', (data) => onData(data, c));
@@ -1535,6 +1577,36 @@ document.addEventListener('DOMContentLoaded', () => {
   $('activeFileBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'file'); });
   $('activeClipBtn').addEventListener('click', () => { if (selectedContact) selectContact(selectedContact, 'clip'); });
 
+  // Relay (TURN) settings — saved only on this browser. A change needs
+  // a reload to take effect, because the Peer is built once at startup.
+  (async () => {
+    try {
+      const data = await chrome.storage.local.get('leoShareTurn');
+      const t = data.leoShareTurn;
+      if (t) {
+        $('turnUrl').value = t.url || '';
+        $('turnUser').value = t.username || '';
+        $('turnPass').value = t.password || '';
+        $('turnStatus').textContent = 'Relay: custom TURN (' + (t.url || '') + ')';
+      }
+    } catch (e) {}
+  })();
+  $('saveTurnBtn').addEventListener('click', async () => {
+    const url = $('turnUrl').value.trim();
+    const username = $('turnUser').value.trim();
+    const password = $('turnPass').value;
+    if (!url || !username) { alert('Enter the TURN server and username first — e.g. turn:global.relay.metered.ca:80 and the username Metered gave you.'); return; }
+    await chrome.storage.local.set({ leoShareTurn: { url, username, password } });
+    $('turnStatus').textContent = 'Relay: custom TURN saved — reload this tab to use it.';
+    log('Custom TURN saved (' + url + '). Reload the tab for it to take effect.');
+  });
+  $('clearTurnBtn').addEventListener('click', async () => {
+    await chrome.storage.local.remove('leoShareTurn');
+    $('turnUrl').value = ''; $('turnUser').value = ''; $('turnPass').value = '';
+    $('turnStatus').textContent = 'Relay: shared demo TURN — reload this tab to use it.';
+    log('Custom TURN cleared — back to the shared demo relay. Reload the tab.');
+  });
+
   $('flushBtn').addEventListener('click', async () => {
     if (!conn || !conn.open) { alert('Not connected — connect to the recipient first, then queued files send automatically.'); return; }
     await flushOutbox(conn.peer);
@@ -1592,5 +1664,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sendMsgBtn').addEventListener('click', sendText);
   $('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
 
-      log('LeoShare v1.4 ready. TURN relay + ICE diagnostics are on — the log now says where a connection stops.');
+        log('LeoShare v1.5 ready. TURN now uses staticauth (fresh HMAC credentials) — plus your own TURN in the Relay card if the demo relay refuses.');
 });

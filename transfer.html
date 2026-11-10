@@ -140,6 +140,23 @@
   </div>
 
   <div class="card">
+    <h2>📡 Relay (TURN) — only used when a direct connection fails</h2>
+    <p class="hint">LeoShare first tries a direct browser-to-browser path. If both networks block that, it relays through a TURN server (encrypted — the relay cannot read your files). By default it uses Metered's shared demo relay, with fresh credentials computed on every connect. If that relay refuses (ICE error 701, relay 0 in the log), paste your own TURN here instead — e.g. sign up free at metered.ca, Dashboard → TURN Servers → generate credentials — and it is used first. Saved only on this browser, never in the repo.</p>
+    <div class="connect-row">
+      <input type="text" id="turnUrl" placeholder="TURN server — e.g. turn:global.relay.metered.ca:80" autocomplete="off" spellcheck="false" style="flex:1">
+    </div>
+    <div class="connect-row" style="margin-top:10px">
+      <input type="text" id="turnUser" placeholder="TURN username" autocomplete="off" style="flex:1;font-family:inherit">
+      <input type="text" id="turnPass" placeholder="TURN password" autocomplete="off" style="flex:1;font-family:inherit">
+    </div>
+    <div class="row-actions">
+      <button id="saveTurnBtn" class="ghost small">Save TURN settings</button>
+      <button id="clearTurnBtn" class="ghost small">Use demo relay only</button>
+      <span class="hint" id="turnStatus" style="margin:0;align-self:center">Relay: shared demo TURN</span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2>📥 Queued — waiting for the other device <span style="color:#94a3b8;font-weight:400;font-size:12px" id="queueCount"></span></h2>
     <p class="hint">If the other device is offline, files dropped below are stored <b>here, in this browser</b> (IndexedDB — they survive closing this tab and restarting Chrome). They send automatically the next time that device connects. Nothing is uploaded to a server, so the file can only arrive when both browsers are open at the same time.</p>
     <div id="outboxList"><p class="empty">Queue is empty.</p></div>
@@ -221,7 +238,7 @@
     <div class="log" id="log"></div>
   </div>
 
-  <footer>LeoShare v1.4 · Peer-to-peer via WebRTC (PeerJS signalling only) · Files are encrypted in transit (DTLS) and never stored on any server.<br>Queue lives on the sender's device only. If a connection fails, both sides: reload this tab, copy the fresh code, and reconnect.</footer>
+  <footer>LeoShare v1.5 · Peer-to-peer via WebRTC (PeerJS signalling only) · Files are encrypted in transit (DTLS) and never stored on any server.<br>Queue lives on the sender's device only. If a connection fails, both sides: reload this tab, copy the fresh code, and reconnect.</footer>
 </div>
 <script src="lib/peerjs.min.js"></script>
 <script src="lib/jszip.min.js"></script>
