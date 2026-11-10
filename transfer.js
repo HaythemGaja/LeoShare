@@ -681,7 +681,7 @@ async function flushOutbox(peerCode) {
   }
 }
 
-// ---------- TURN relay (v1.5) ----------
+// ---------- TURN relay (v1.5 + v1.6) ----------
 // v1.4's TURN was dead: it used the static pair
 // username openrelayproject / credential openrelayproject against
 // openrelay.metered.ca. That pair is stale — Metered no longer accepts
@@ -695,7 +695,16 @@ async function flushOutbox(peerCode) {
 // uses; the secret is Metered's own published shared value, not a
 // private password). Credentials expire after 24 h, so they are
 // computed fresh every time a Peer is created — never stored.
-let turnMode = 'staticauth (shared demo relay)';
+// v1.6: the staticauth relay ALSO failed in the field test
+// (2026-11-10 17:45, leo-tshxwm: 701, relay 0, ICE never left
+// gathering — and the host is TCP-reachable, so this is the relay
+// refusing the allocate, not the network blocking it). So v1.6 adds
+// a second no-signup demo relay as fallback: freeturn.net
+// (turn:freeturn.net:3478 + turns:freeturn.net:5349, username/password
+// free/free, no account). If both demo relays refuse, the durable fix
+// is your own TURN — see TURN_SETUP.md (free Metered account, or
+// self-hosted coturn on the Oracle Always Free VM).
+let turnMode = 'shared demo relays (staticauth + freeturn)';
 async function computeStaticAuthTurn() {
   const expiry = Math.floor(Date.now() / 1000) + 86400;
   const username = expiry + ':leoshare';
@@ -728,11 +737,19 @@ async function buildIceServers() {
       'turn:staticauth.openrelay.metered.ca:443?transport=tcp',
       'turns:staticauth.openrelay.metered.ca:443'
     ]) servers.push({ urls, username: sa.username, credential: sa.credential });
-    if (!custom) log('Relay: using the shared demo TURN (staticauth) — fresh credentials, valid 24 h.');
-    else log('Relay: custom TURN set, shared demo TURN kept as fallback.');
+    if (!custom) log('Relay: using the shared demo TURNs — staticauth (fresh credentials, valid 24 h) + freeturn (free/free) as fallback.');
+    else log('Relay: custom TURN set, shared demo TURNs kept as fallback.');
   } catch (e) {
     log('Could not compute TURN credentials — direct connection only. (' + (e.message || e) + ')', 'err');
   }
+  // v1.6 second demo relay: freeturn.net, no account, username/password
+  // free/free. ICE tries every server in the list, so a working relay
+  // here is enough even when staticauth refuses.
+  for (const urls of [
+    'turn:freeturn.net:3478',
+    'turn:freeturn.net:3478?transport=tcp',
+    'turns:freeturn.net:5349'
+  ]) servers.push({ urls, username: 'free', credential: 'free' });
   return servers;
 }
 
@@ -1603,8 +1620,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('clearTurnBtn').addEventListener('click', async () => {
     await chrome.storage.local.remove('leoShareTurn');
     $('turnUrl').value = ''; $('turnUser').value = ''; $('turnPass').value = '';
-    $('turnStatus').textContent = 'Relay: shared demo TURN — reload this tab to use it.';
-    log('Custom TURN cleared — back to the shared demo relay. Reload the tab.');
+    $('turnStatus').textContent = 'Relay: shared demo relays — reload this tab to use it.';
+    log('Custom TURN cleared — back to the shared demo relays. Reload the tab.');
   });
 
   $('flushBtn').addEventListener('click', async () => {
@@ -1664,5 +1681,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sendMsgBtn').addEventListener('click', sendText);
   $('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
 
-        log('LeoShare v1.5 ready. TURN now uses staticauth (fresh HMAC credentials) — plus your own TURN in the Relay card if the demo relay refuses.');
+        log('LeoShare v1.6 ready. Demo relays are now staticauth + freeturn (free/free) — plus your own TURN in the Relay card if both demo relays refuse.');
 });

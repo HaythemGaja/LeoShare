@@ -14,6 +14,34 @@ No email. No Google Drive. Nothing is uploaded to any server.
 - Files are sent in 16 KB pieces with progress, speed, and Accept/Decline
   on the receiving side. Received files download automatically.
 
+## What's new in v1.6 (second demo relay — the staticauth relay was dead too)
+
+The v1.5 field test (2026-11-10 17:45, leo-tshxwm) proved it: **ICE
+error 701, relay 0, ICE never left gathering** — same as v1.4, now
+against `staticauth.openrelay.metered.ca`. The host is TCP-reachable
+(ports 80/443 answer), so this is the relay refusing the allocate,
+not the network blocking it. Metered still documents the staticauth
+secret, but in practice it grants no allocation from these networks.
+
+- **Second demo relay: freeturn.net.** No account, username/password
+  `free` / `free`: `turn:freeturn.net:3478` (UDP + TCP) and
+  `turns:freeturn.net:5349`. ICE tries every server in the list, so
+  if freeturn answers, the channel opens even though staticauth
+  refuses. Staticauth stays in the list as the first demo relay.
+- **Durable fix, documented.** `TURN_SETUP.md` now spells out the two
+  own-TURN routes, ready to follow: (A) a free Metered account
+  (Dashboard → TURN Servers → generate credentials, paste into the
+  Relay card), (B) self-hosted coturn — recommended on the Oracle
+  Always Free VM (public IP, no port forwarding), with the OptiPlex
+  variant noted. Either one is pasted into the Relay card already in
+  v1.5/v1.6 — no code change needed to switch.
+
+Still untested live: this VM blocks UDP, so a real TURN allocate
+could not be run here. If v1.6 shows `relay 1` + `ICE: connected`,
+freeturn did it. If it still shows 701 / relay 0, both demo relays
+are dead from these networks and the next step is your own TURN
+(TURN_SETUP.md) — pick A or B and I will set it up with you.
+
 ## What's new in v1.5 (staticauth TURN — the v1.4 relay was dead)
 
 The v1.4 log proved it: **ICE error 701, relay 0 on both sides**.
@@ -249,4 +277,4 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - `lib/jsqr.js` — jsQR 1.4.0, for Scan QR
 - `icons/` — extension icons
 
-Version 1.5 — built 2026-11-10.
+Version 1.6 — built 2026-11-10.

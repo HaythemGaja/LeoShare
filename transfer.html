@@ -141,7 +141,7 @@
 
   <div class="card">
     <h2>📡 Relay (TURN) — only used when a direct connection fails</h2>
-    <p class="hint">LeoShare first tries a direct browser-to-browser path. If both networks block that, it relays through a TURN server (encrypted — the relay cannot read your files). By default it uses Metered's shared demo relay, with fresh credentials computed on every connect. If that relay refuses (ICE error 701, relay 0 in the log), paste your own TURN here instead — e.g. sign up free at metered.ca, Dashboard → TURN Servers → generate credentials — and it is used first. Saved only on this browser, never in the repo.</p>
+    <p class="hint">LeoShare first tries a direct browser-to-browser path. If both networks block that, it relays through a TURN server (encrypted — the relay cannot read your files). By default it tries two shared demo relays, Metered staticauth (fresh credentials computed on every connect) and freeturn.net (free/free). If both refuse (ICE error 701, relay 0 in the log), paste your own TURN here instead — e.g. sign up free at metered.ca, Dashboard → TURN Servers → generate credentials, or your own coturn (see TURN_SETUP.md) — and it is used first. Saved only on this browser, never in the repo.</p>
     <div class="connect-row">
       <input type="text" id="turnUrl" placeholder="TURN server — e.g. turn:global.relay.metered.ca:80" autocomplete="off" spellcheck="false" style="flex:1">
     </div>
@@ -152,7 +152,7 @@
     <div class="row-actions">
       <button id="saveTurnBtn" class="ghost small">Save TURN settings</button>
       <button id="clearTurnBtn" class="ghost small">Use demo relay only</button>
-      <span class="hint" id="turnStatus" style="margin:0;align-self:center">Relay: shared demo TURN</span>
+      <span class="hint" id="turnStatus" style="margin:0;align-self:center">Relay: shared demo relays</span>
     </div>
   </div>
 
