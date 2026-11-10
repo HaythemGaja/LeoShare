@@ -1,1 +1,30 @@
-{"action":{"default_icon":{"128":"icons/icon128.png","16":"icons/icon16.png","48":"icons/icon48.png"},"default_popup":"popup.html","default_title":"LeoShare"},"background":{"service_worker":"background.js"},"description":"Send files directly from one browser to another on a different device. No email, no Google Drive, no upload to any server — peer-to-peer over WebRTC. Trusted contacts, offline queue, folders, multi-send, clipboard, history, QR pairing and previews.","icons":{"128":"icons/icon128.png","16":"icons/icon16.png","48":"icons/icon48.png"},"manifest_version":3,"name":"LeoShare — Send Files Between Browsers","permissions":["storage","downloads","notifications","tabs","contextMenus"],"version":"1.2.0"}
+{
+  "action": {
+    "default_icon": {
+      "128": "icons/icon128.png",
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png"
+    },
+    "default_popup": "popup.html",
+    "default_title": "LeoShare"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "description": "Send files directly from one browser to another on a different device. No email, no Google Drive, no upload to any server \u2014 peer-to-peer over WebRTC. Trusted contacts, offline queue, folders, multi-send, clipboard, history, QR pairing and previews.",
+  "icons": {
+    "128": "icons/icon128.png",
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png"
+  },
+  "manifest_version": 3,
+  "name": "LeoShare \u2014 Send Files Between Browsers",
+  "permissions": [
+    "storage",
+    "downloads",
+    "notifications",
+    "tabs",
+    "contextMenus"
+  ],
+  "version": "1.2.1"
+}

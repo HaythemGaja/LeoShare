@@ -14,6 +14,33 @@ No email. No Google Drive. Nothing is uploaded to any server.
 - Files are sent in 16 KB pieces with progress, speed, and Accept/Decline
   on the receiving side. Received files download automatically.
 
+## What's new in v1.2.1 (connection fix)
+
+v1.2 said "Connected" as soon as `connect()` was called, but PeerJS
+`.open` is false until the DataChannel actually opens — so files dropped
+in that window were queued as "offline" while the UI said Connected, and
+tapping Connect twice (or both sides connecting at once) created
+duplicate connections that overwrote each other in the map, with a stale
+close then deleting the live one. That is the 5-incoming-connections-in-
+2-seconds loop from the field log.
+
+- **One connection per peer**, kept from the first attempt — duplicates
+  are closed immediately, even while connecting.
+- **"Connected ✓" only when the data channel opens.** Until then the
+  status says "Connecting… (opening data channel)".
+- **Wait-for-open:** dropping a file or sending clipboard while a
+  connection is opening waits up to 8 seconds for the channel before
+  deciding the peer is offline and queueing.
+- **Connect guard + 4 s cooldown:** tapping Connect again, or the
+  multi-send timer firing, cannot spawn another connection while one
+  is in flight.
+- **Stale close cannot delete a live connection:** a close only removes
+  the map entry if it is still that same connection object.
+- **Queue dedupe:** the same file (name + size) for the same peer,
+  already queued, is not queued a second time.
+- **"Send now" tells the truth:** if the channel is still opening it
+  says so, instead of "Connect to … first".
+
 ## What's new in v1.2 (features 1–8)
 
 ### 1. Folder send
@@ -148,4 +175,4 @@ Queued files wait safely on the sender — closing the tab does not lose them.
 - `lib/jsqr.js` — jsQR 1.4.0, for Scan QR
 - `icons/` — extension icons
 
-Version 1.2.0 — built 2026-11-10.
+Version 1.2.1 — built 2026-11-10.

@@ -34,6 +34,24 @@ let clipHistory = [];
 let lastConnectAttempt = null;
 let connectionOpenedAt = 0;
 let flushingFor = null;
+const connectingPeers = new Set(); // codes with a connect attempt in flight
+const lastConnectAttemptAt = {};   // code -> timestamp, connect cooldown
+const flushRetryTimers = new Set();
+function isUsable(code) { const c = getConn(code); return !!(c && c.open); }
+// Wait for a peer's data channel to actually open (up to ms). Returns true
+// if it opened, false on timeout / close. This is the v1.2.1 fix: v1.2
+// treated "connect() called" as connected, but PeerJS .open is false
+// until the DataChannel opens, so files were queued as "offline" while
+// the UI said Connected.
+async function waitForOpen(code, ms) {
+  const deadline = Date.now() + (ms || 8000);
+  while (Date.now() < deadline) {
+    if (isUsable(code)) return true;
+    if (!conns.has(code) && !connectingPeers.has(code)) return false;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return isUsable(code);
+}
 let multiSendTargets = [];     // codes, in order, for feature 3
 let multiSendTimer = null;
 let pendingClipboard = null;   // {text, target} waiting for a connection
@@ -485,7 +503,8 @@ async function renderOutbox() {
       b.addEventListener('click', fn); actions.appendChild(b);
     };
     mk('Send now', '', async () => {
-      if (!getConn(r.to) || !getConn(r.to).open) { alert('Connect to ' + (r.toName || r.to) + ' first — tap Connect next to them in Trusted contacts.'); return; }
+      if (!getConn(r.to)) { log('Send now: connecting to ' + (r.toName || r.to) + '…'); connectTo(r.to); if (await waitForOpen(r.to, 8000)) await flushOutbox(r.to); else await renderOutbox(); return; }
+      if (!getConn(r.to).open) { alert('Still connecting to ' + (r.toName || r.to) + ' — the data channel isn’t open yet. Wait a few seconds; queued files send automatically when it opens.'); return; }
       await flushOutbox(r.to);
     }, r.status === 'delivered');
     mk('Remove', 'danger', async () => { await idbDelete(r.id); renderOutbox(); });
@@ -497,8 +516,16 @@ async function queueOffline(entries, targetCode) {
   const target = normaliseCode(targetCode);
   const toName = contactName(target);
   let queued = 0;
+  // Dedupe: the same file (name + size) for the same peer, already
+  // queued, is not queued a second time — v1.2 queued the same PDF twice.
+  let existing = [];
+  try { existing = await idbGetAll(); } catch (e) {}
   for (const e of entries) {
     const f = e.file;
+    if (existing.some((r) => r.to === target && r.name === f.name && r.size === f.size && (r.status === 'queued' || r.status === 'sending'))) {
+      log('Already queued: ' + f.name + ' for ' + toName + ' — not queueing it again.');
+      continue;
+    }
     const preview = await makePreview(f);
     const sha256 = await sha256Hex(f);
     const rec = {
@@ -523,7 +550,17 @@ async function queueOffline(entries, targetCode) {
 async function flushOutbox(peerCode) {
   if (flushingFor === peerCode) return;
   const c = getConn(peerCode);
-  if (!c || !c.open) return;
+  if (!c) return;
+  if (!c.open) {
+    // Data channel still opening — the open handler flushes when it
+    // opens. Schedule one retry in case that handler already ran.
+    log('Waiting for the data channel to ' + contactName(peerCode) + ' to open before sending queued files…');
+    if (!flushRetryTimers.has(peerCode)) {
+      flushRetryTimers.add(peerCode);
+      setTimeout(() => { flushRetryTimers.delete(peerCode); flushOutbox(peerCode); }, 2000);
+    }
+    return;
+  }
   let all = [];
   try { all = await idbGetAll(); } catch (e) { return; }
   const mine = all.filter((r) => r.to === peerCode && r.status === 'queued').sort((a, b) => a.queuedAt - b.queuedAt);
@@ -599,6 +636,7 @@ async function initPeer() {
       chrome.storage.local.remove('leoShareId').then(initPeer);
     } else if (err.type === 'peer-unavailable') {
       const target = lastConnectAttempt;
+      if (target) connectingPeers.delete(target);
       setStatus('That device is not online. Files for them stay queued — they will send when they come online.', false);
       log('Peer unavailable: ' + (err.message || target), 'err');
       if (target) notify(contactName(target) + ' is offline', 'That device is not online right now. Anything you send them will be queued and delivered when they come online.');
@@ -616,26 +654,36 @@ async function initPeer() {
 }
 
 function attachConn(c) {
-  if (conns.has(c.peer) && conns.get(c.peer).open) {
-    log('Already connected to ' + c.peer + ' — ignoring second connection.');
-    c.on('open', () => c.close());
+  // v1.2.1: ONE connection per peer, kept from the first attempt — even
+  // while it is still connecting. v1.2 only rejected a duplicate when the
+  // existing conn was already .open, so a second connect (or an incoming
+  // conn while our outgoing one was still opening) overwrote the map and
+  // orphaned the first conn. Its close handler then deleted the live one.
+  if (conns.has(c.peer)) {
+    log('Already have a connection to ' + c.peer + ' — ignoring this duplicate.');
+    try { c.close(); } catch (e) {}
     return;
   }
   conns.set(c.peer, c);
+  connectingPeers.add(c.peer);
   conn = c; // primary = most recent, for the Disconnect button / messages
   $('connectBtn').disabled = true;
   $('disconnectBtn').disabled = false;
   $('peerInput').value = c.peer;
-  setStatus('Connected to ' + contactName(c.peer) + ' ✓ — you can send files now.', true);
-  log('Connected to ' + c.peer, 'ok');
+  // Do NOT say "Connected" here — the data channel is not open yet.
+  setStatus('Connecting to ' + contactName(c.peer) + '… (opening data channel)', false);
+  log('Connecting to ' + c.peer + '… (waiting for data channel to open)');
   c.on('data', (data) => onData(data, c));
   c.on('close', async () => {
     log('Connection to ' + c.peer + ' closed. Queued files stay queued.');
+    connectingPeers.delete(c.peer);
     // Persist any partial downloads from this peer for resume.
     for (const rec of incoming.values()) {
       if (rec.fromPeer === c.peer && rec.accepted && !rec.done && rec.received > 0) await savePartial(rec.meta.id);
     }
-    conns.delete(c.peer);
+    // Only delete the map entry if it is still THIS conn — a stale close
+    // must never delete a newer live connection (v1.2 bug).
+    if (conns.get(c.peer) === c) conns.delete(c.peer);
     if (conn === c) conn = [...conns.values()].pop() || null;
     if (!conns.size) {
       $('connectBtn').disabled = false;
@@ -645,10 +693,15 @@ function attachConn(c) {
     renderOutbox();
     advanceMultiSend();
   });
-  c.on('error', (e) => log('Connection error: ' + (e.message || e), 'err'));
+  c.on('error', (e) => {
+    connectingPeers.delete(c.peer);
+    log('Connection error: ' + (e.message || e), 'err');
+  });
   c.on('open', async () => {
+    connectingPeers.delete(c.peer);
     connectionOpenedAt = Date.now();
-    setStatus('Connected to ' + contactName(c.peer) + ' ✓ — you can send files now.', true);
+    setStatus('Connected to ' + contactName(c.peer) + ' ✓ — data channel open, you can send files now.', true);
+    log('Data channel open to ' + c.peer + ' — ready to send.', 'ok');
     await upsertContact(c.peer, { lastSeen: Date.now() });
     try { c.send({ type: 'hello', from: myId, displayName: myDisplayName }); } catch (e) {}
     if (pendingClipboard && (pendingClipboard.target === 'connected' || pendingClipboard.target === c.peer)) {
@@ -665,8 +718,21 @@ function connectTo(code) {
   if (!code) { alert('Paste the other device’s code first.'); return; }
   if (code === myId) { alert('That is your own code — you need the other device’s code.'); return; }
   if (!peer || peer.disconnected) { alert('Not online yet — wait a second and try again.'); return; }
-  if (getConn(code) && getConn(code).open) { alert('Already connected to ' + code + '.'); return; }
+  // v1.2.1: never start a second connect while one is in flight or a
+  // connection already exists, and cool down repeats (4 s). Tapping
+  // Connect twice, or the multi-send timer firing, used to spawn a new
+  // DataConnection every time — the other side saw 5 incoming connects
+  // in 2 seconds.
+  if (conns.has(code)) {
+    if (isUsable(code)) alert('Already connected to ' + code + '.');
+    else log('Already connecting to ' + code + ' — waiting for the data channel…');
+    return;
+  }
+  if (connectingPeers.has(code)) { log('Already connecting to ' + code + ' — waiting…'); return; }
+  if (Date.now() - (lastConnectAttemptAt[code] || 0) < 4000) { log('Connect to ' + code + ' tried moments ago — waiting before retrying.'); return; }
   lastConnectAttempt = code;
+  lastConnectAttemptAt[code] = Date.now();
+  connectingPeers.add(code);
   log('Connecting to ' + code + '…');
   setStatus('Connecting to ' + code + '…');
   const c = peer.connect(code, { reliable: true });
@@ -985,10 +1051,22 @@ async function queueFiles(entries) {
   // Folder announcement for the receiver (feature 1)
   const folders = [...new Set(entries.map((e) => e.folder).filter(Boolean))];
   for (const target of targets) {
-    const c = getConn(target);
-    const isLive = c && c.open;
+    // v1.2.1: if a connection is in flight, WAIT for its data channel
+    // to open before deciding the peer is "offline". v1.2 queued the
+    // file immediately when .open was still false, even though the UI
+    // already said Connected.
+    let isLive = isUsable(target);
+    if (!isLive && (conns.has(target) || connectingPeers.has(target))) {
+      log('Waiting for the data channel to ' + contactName(target) + ' to open…');
+      isLive = await waitForOpen(target, 8000);
+    }
+    if (!isLive && !conns.has(target) && !connectingPeers.has(target)) {
+      log('Connecting to ' + contactName(target) + ' to deliver…');
+      connectTo(target);
+      isLive = await waitForOpen(target, 8000);
+    }
     if (isLive) {
-      // Live send to this target
+      const c = getConn(target);
       if (folders.length) {
         for (const folder of folders) {
           const files = entries.filter((e) => e.folder === folder);
@@ -1001,11 +1079,6 @@ async function queueFiles(entries) {
     }
   }
   if (multi.length > 1) startMultiSend(multi);
-  else if (targets.length === 1 && !getConn(targets[0])) {
-    // Single offline target: try to connect so the queue flushes.
-    log('Connecting to ' + contactName(targets[0]) + ' to deliver the queue…');
-    connectTo(targets[0]);
-  }
 }
 
 async function sendLive(entries, target) {
@@ -1146,7 +1219,17 @@ async function sendClipboardText(text, target) {
   if (!text) { alert('Type some text or a link first.'); return; }
   const targetCode = target ? normaliseCode(target) : ($('sendToSelect').value ? normaliseCode($('sendToSelect').value) : (conn ? conn.peer : ''));
   if (!targetCode) { alert('Not connected — connect to a device first, or the text will be kept in the box.'); return; }
-  const c = getConn(targetCode);
+  // v1.2.1: same wait-for-open as files — a connecting peer is not offline.
+  let c = getConn(targetCode);
+  if (c && !c.open) {
+    log('Waiting for the data channel to ' + contactName(targetCode) + ' to open for clipboard…');
+    if (await waitForOpen(targetCode, 8000)) c = getConn(targetCode);
+  }
+  if (!c) {
+    log('Connecting to ' + contactName(targetCode) + ' to send clipboard…');
+    connectTo(targetCode);
+    if (await waitForOpen(targetCode, 8000)) c = getConn(targetCode);
+  }
   if (!c || !c.open) {
     pendingClipboard = { text, target: targetCode };
     notify(contactName(targetCode) + ' is offline', 'Your text will send when they come online.');
@@ -1370,5 +1453,5 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sendMsgBtn').addEventListener('click', sendText);
   $('msgInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendText(); });
 
-  log('LeoShare v1.2 ready. Folders, resume, multi-send, clipboard, right-click send, history, QR and previews are on.');
+  log('LeoShare v1.2.1 ready. Folders, resume, multi-send, clipboard, right-click send, history, QR and previews are on.');
 });
