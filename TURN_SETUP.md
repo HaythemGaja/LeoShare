@@ -76,14 +76,93 @@ Then in LeoShare's Relay card on both browsers:
 - Password: the one you set in `turnserver.conf`
 - Save, reload the tab.
 
-## Route C — coturn on the OptiPlex (same software, more moving parts)
+## Route C — coturn on the OptiPlex (done 2026-11-11 — running)
 
-Same install and config as Route B, on the OptiPlex (192.168.1.7),
-with `external-ip` set to the home public IP. Extra steps: forward
-3478 (TCP+UDP) and 49152–65535 (UDP) on the router (192.168.1.1) to
-192.168.1.7, the box must stay on, and the home public IP changes
-unless DDNS is set up — so the Relay card value can go stale. Only
-pick this if you prefer the relay at home over the Oracle VM.
+Same software as Route B, on the home OptiPlex (192.168.1.7, Ubuntu
+24.04), installed **without sudo** — the box's sudo needs a password,
+so coturn runs as a user service from `~/coturn`:
+
+```bash
+# on the OptiPlex, as hay1 — noble's coturn is 4.6.1-1build4
+# (-2build2 is for a newer Ubuntu and wants libraries noble lacks)
+cd /tmp
+curl -O http://archive.ubuntu.com/ubuntu/pool/universe/c/coturn/coturn_4.6.1-1build4_amd64.deb
+for p in core extra openssl pthreads; do
+  curl -O http://archive.ubuntu.com/ubuntu/pool/main/libe/libevent/libevent-$p-2.1-7t64_2.1.12-stable-10ubuntu0.2_amd64.deb
+done
+mkdir -p ~/coturn
+dpkg-deb -x coturn_4.6.1-1build4_amd64.deb ~/coturn
+for d in libevent-*.deb; do dpkg-deb -x "$d" ~/coturn; done
+```
+
+`~/.config/coturn/turnserver.conf` (chmod 600 — the password lives
+only here, never in chat or the repo):
+
+```
+listening-port=3478
+listening-ip=127.0.0.1
+listening-ip=192.168.1.7
+relay-ip=192.168.1.7
+min-port=49152
+max-port=65535
+lt-cred-mech
+user=leoshare:<password generated on the box with openssl rand -hex 16>
+realm=leoshare.local
+log-file=/home/hay1/coturn/turnserver.log
+pidfile=/home/hay1/coturn/turnserver.pid
+no-stdout-log
+```
+
+User service `~/.config/systemd/user/coturn-leoshare.service`
+(enabled, Restart=always; linger is on so it survives reboots):
+
+```
+[Unit]
+Description=LeoShare TURN server (coturn, user install)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/hay1/coturn/usr/bin/turnserver -c /home/hay1/.config/coturn/turnserver.conf
+Environment=LD_LIBRARY_PATH=/home/hay1/coturn/usr/lib/x86_64-linux-gnu
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now coturn-leoshare.service
+```
+
+Open the port in the box firewall (needs the OptiPlex password,
+typed on the box):
+
+```bash
+sudo ufw allow 3478/tcp && sudo ufw allow 3478/udp
+```
+
+Then in LeoShare's Relay card on both browsers (home Wi-Fi):
+
+- TURN server: `turn:192.168.1.7:3478`
+- Username: `leoshare`
+- Password: the one in `~/.config/coturn/turnserver.conf`
+  (read it on the box: `grep '^user=leoshare:' ~/.config/coturn/turnserver.conf`)
+- Save, reload the tab.
+
+Proved 2026-11-11: TURN allocate returns a relay candidate on both
+127.0.0.1:3478 and 192.168.1.7:3478. Honest limits: the box must stay
+on; this is LAN-first with no `external-ip`, so a browser off the
+home network can't reach it — that needs a router port-forward of
+3478 (TCP+UDP) and 49152–65535 (UDP) to 192.168.1.7 plus
+`external-ip=<home public IP>` in the config, and the public IP can
+change unless DDNS is set up. No TLS (`turns:`) yet — it needs a real
+certificate; browsers reject self-signed ones. This replaces Metered
+in the Relay card (one custom slot); Metered stays the fallback if
+the box is off.
 
 ## If a relay still shows 701 / relay 0
 
